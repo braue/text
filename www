@@ -1,133 +1,113 @@
-  Best Test Order
+• For your architecture, the DMA plan should select the RTAC resources, not all
+  the relay resources, if the RTACs are already collecting the relay events/SOE.
 
-  1. Record exact times
-      - 2407 display time/date or TIM/UTC
-      - 3350 system time and active source
-      - One relay time
-      - Relay IRIGOK/TIRIG/TSOK
-  2. Check whether relays are actually synced
-      - SEL-700: look for IRIGOK = 1; TSOK = 1 if high-accuracy time is good.
-      - SEL-400: look for TIRIG = 1; TSOK = 1 if applicable.
-      - If relays are wrong but IRIGOK/TIRIG = 1, they are receiving bad-but-valid time.
-      - If IRIGOK/TIRIG = 0, they are not receiving IRIG and may be running on stale internal clocks.
-  3. Check the SEL-2407
-      - Front LEDs: SATELLITE LOCK should be green.
-      - ENABLED should be green, not yellow if in forced/manual mode.
-      - Connect serial 9600 8N1 and run:
+  The relays still matter, but mainly as child/identity resources so DMA can
+  label the records under the correct relay instead of only under the parent
+  RTAC.
 
-        STA
-        FOR
-        TIM
-        UTC
-        DST
-        DTQ
+  Recommended Setup
 
-      - In STA, check self-tests, antenna, signal locked, firmware FID, switch settings.
-      - In FOR, confirm the output feeding the 3350 is actually IRIG-B000 or extended IRIG, not PPS, KPPS, ALARM, B002, or UTC unexpectedly.
-      - If any output line has +OUTn, that output was overridden by a FOR command.
+  1. In Resource Management, each RTAC should have a resource with a POSTGRESQL
+     connection:
+      - Host: RTAC IP
+      - Port: 5432
+      - Database: 3530
+      - Valid RTAC database credentials
+  2. Each relay should exist as a resource only if you want DMA Archive/
+     reporting to associate records to the relay.
+     For that to work, each relay resource needs a globalDeviceId matching the
+     RTAC-side relay Device GUID.
+  3. On each RTAC POSTGRESQL connection, add the relay resources as Child
+     Resources. The manual says child resources on a POSTGRESQL parent
+     connection must have globalDeviceId configured.
+  4. In Disturbance Monitoring > New Plan, create collection plans against the
+     30 RTAC resources:
+      - One plan for Oscillography/Event records if collecting CEV/COMTRADE.
+      - One plan for SOE if the UI only lets you choose one report type per
+        plan.
+      - Same 30 RTACs can be used in both plans.
+  5. In the plan’s advanced options, pay attention to the misconfigured GUID
+     policy:
+      - Default shown in the manual: Associate with Parent Resource
+      - That means if a relay GUID does not match a child resource, DMA will
+        file the data under the RTAC.
 
-  4. Confirm the 2407 output used
-      - The 3350 wants demodulated IRIG-B, so feed it from a 2407 demodulated BNC output OUT1-OUT6.
-      - Do not feed the 3350 from the 2407 MOD output.
-      - Prefer extended IRIG-B000/C37.118-style output, not basic IRIG-B002.
-  5. Check for basic IRIG date/year issue
-      - IRIG-B002 does not include year or extended control bits.
-      - Six-month/date problems can happen when devices infer date/year incorrectly.
-      - Use extended IRIG from the 2407 where possible:
-          - OUT1-OUT3: DIP pair should select IRIG-B000.
-          - OUT4-OUT6/serial/fiber: SW5 = Extended.
-  6. Check the 3350 time source
-      - In RTAC web Date/Time:
-          - IRIG Enable Input = True
-          - IRIG Priority = 1
-          - active time source should be IRIG-B
-          - IRIG Enable Output = True
-      - If active source is Free Running, NTP, PTP, or DNP, the 3350 is not using the 2407 as intended.
-  7. Compare 2407 vs 3350
-      - If 2407 is correct but 3350 is wrong, focus on 3350 IRIG input/status/time settings.
-      - If 3350 is wrong and relays match the 3350, the 3350 is distributing bad time.
-      - If 2407 itself is wrong while satellite locked, suspect 2407 firmware/GPS/date rollover issue or manual/forced mode.
-  8. Look for protocol time sync fighting IRIG
-      - Check whether the RTAC is also sending DNP/serial time sync to relays.
-      - DNP time sync should not overwrite good IRIG time unless intentionally used as backup.
-      - If all relays were set by DNP from bad 3350 system time, that could create plant-wide wrong dates.
-  9. Check relay settings
-      - For SEL-751A/787 style relays:
-          - TIME_SRC := IRIG1 for terminal/serial IRIG input
-          - TIME_SRC := IRIG2 for fiber IRIG input
-          - IRIGC := C37.118 if receiving extended IRIG
-      - If using basic IRIG, IRIGC := NONE, but I would avoid basic IRIG here.
-  10. Check wiring/load
+  RTAC Side
+  Use the RTAC DMA Link extension if possible. It sets up the pieces DMA
+  expects:
 
-  - 3350 serial IRIG output: RJ45 pin 3 = +IRIG, pin 1 = -IRIG/GND.
-  - Many SEL relay DB-9 ports: pin 4 = +IRIG, pin 6 = -IRIG.
-  - If many relays are paralleled, check drive capacity and termination.
-  - Bad wiring usually gives no sync, not a clean six-month offset.
+  - RTAC GUID
+  - SEL Client Device GUIDs for relays
+  - Event collection type: CEV or COMTRADE
+  - ASCII SER logging for SOE
+  - DMA_Listening_SEL
+  - New Event Notification = Encrypted Database
+  - Unsolicited Event/SOE notices to Blueframe
 
-  Most likely for six months off: the 3350 is not locked to the 2407 and is distributing its own wrong system time, or the 2407/3350 path is using a basic/wrong IRIG format and the
-  date/year is being inferred incorrectly. Start by proving the active source on the 3350 and whether one relay shows IRIGOK/TIRIG.
+  For 30 RTACs, I would use Listening if allowed by the network. RTAC sends
+  notification to Blueframe on TCP 5000; DMA then connects back to the RTAC
+  database on 5432 and collects new reports. Polling still works, but listening
+  avoids hammering all RTACs on a schedule.
+
+  Bottom Line
+  Select the RTACs in the DMA plan. Keep the relays as child resources with
+  matching GUIDs if you want the archive to show “Relay X event” instead of
+  “RTAC Y event.” If you select both RTACs and relays for direct collection, you
+  risk duplicate or split collection unless that is intentional.
 
 
-› Can you include the RTAC system_time_control settings check in that list
 
 
-• Yes. Add this section to the checklist under the 3350 checks.
 
-  RTAC System_Time_Control Checks
-  In ACSELERATOR RTAC, open the project and go to:
 
-  System → System_Time_Control → POU Pin Settings
 
-  Check these items:
+For your DMA setup, use Blueframe DMA email publishing, not RTAC Email Plus,
+  unless you specifically want each RTAC to send its own emails.
 
-  1. IRIG input enabled
-      - Enable_IRIG_B_Time_In = TRUE
-      - If this is false, the RTAC will not use the 2407 IRIG input.
-  2. IRIG input priority
-      - Set_IRIG_B_Time_In_Source_Priority = 1
-      - IRIG should normally be the highest-priority source when using the 2407 as the plant master clock.
-  3. Other time source priorities
-      - Check NTP, PTP, DNP, and IEC 60870 input priorities.
-      - Make sure a bad protocol source is not higher priority than IRIG.
-      - For troubleshooting, temporarily confirm whether the active source is actually IRIG before assuming the clock is the problem.
-  4. IRIG output enabled
-      - Enable_IRIG_B_Time_Out = TRUE
-      - This allows the RTAC to distribute IRIG out to relays through the BNC/serial IRIG outputs.
-  5. IRIG input offset
-      - Set_IRIG_B_Time_In_Offset
-      - Should normally be 0 unless there is a deliberate correction.
-      - A six-month error would not normally come from this, but still verify it is not strange.
-  6. IRIG output offset
-      - Set_IRIG_B_Time_Out_Offset
-      - Should normally be 0.
-      - If nonzero, the RTAC is intentionally modifying the outgoing IRIG time.
-  7. DST handling on input
-      - Enable_IRIG_B_Time_In_DST_Offset
-      - Should match what the SEL-2407 is sending.
-      - If the 2407 sends local time with DST applied, the RTAC must not apply DST incorrectly again.
-  8. DST handling on output
-      - Enable_IRIG_B_Time_Out_DST_Offset
-      - Check whether the RTAC is modifying the outgoing IRIG for DST.
-      - Avoid double-DST between 2407, RTAC, and relay.
-  9. System UTC offset
-      - Set_System_Time_UTC_Offset
-      - For US Eastern standard time: -300 minutes.
-      - Central: -360
-      - Mountain: -420
-      - Pacific: -480
-      - This is standard-time offset, not daylight offset.
-  10. Global UTC settings
+  Blueframe DMA Email Setup
 
-  - Enable_Global_UTC
-  - Apply_System_Time_UTC_Offset_Globally
-  - Make sure these match the plant standard. If the system expects local relay time, don’t accidentally normalize everything to UTC unless that is intentional.
+  1. Create the SMTP resource
+      - Go to Resource Management
+      - Add/configure an SMTP or SMTPS resource
+      - Set server address, port, TLS/authentication, credentials as required by
+        your mail server
+  2. Create the target email group
+      - Open Notifications
+      - Go to Recipient Groups
+      - Select New Recipient Group
+      - Pick the SMTP server resource
+      - Set the sender/from address
+      - Add the target email addresses
+      - Create/save the group
+  3. Create the DMA email publisher
+      - Open Disturbance Monitoring
+      - Go to Publishing
+      - Select New Publisher
+      - Set:
+          - Type: Email
+          - Recipient Group: your target email group
+          - Report Type: SOE or Oscillography, depending what you want emailed
+      - Select resources:
+          - If records are associated to relay child resources, select the relay
+            resources
+          - If records show under parent RTACs, select the RTAC resources
+      - Create the publisher
+  4. Make sure collection/listening is already working
+     Emails are sent when new data is collected into DMA. If you create the
+     email publisher after old events were already collected, it generally won’t
+     email those old records.
 
-  11. Active source and values
+  RTAC Email Plus Alternative
+  If you mean the RTAC’s Email Plus extension:
 
-  - On the System_Time_Control online/controller view, check:
-      - System_Time
-      - Time_Source_Ident
-      - IRIG_B_Time_In_Value
-      - IRIG_B_Time_Out_Value
-      - Time_Synch_Applied
-      - Time_Sync_Outside_Slew_Threshold
+  - Insert Email Plus
+  - Set Emailer Type to Monitored Events
+  - Configure SMTP server, port, TLS, username/password, sender
+  - On Recipient Groups, add the target email addresses
+  - On Monitored Events, add each SEL Protocol client/relay, assign a recipient
+    group, and choose attachment type: None, CEV, or COMTRADE
+  - Use Auto-Config Device = True to enable new-event filtering and required
+    event tags
+
+  For your 30-RTAC DMA architecture, I’d centralize it in Blueframe Publishing
+  unless there is a requirement for station-local RTAC emails.
